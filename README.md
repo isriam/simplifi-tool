@@ -11,6 +11,53 @@ A Python application to download, parse, and export transactions from Quicken Si
 - **Summary Statistics**: Generate financial summaries and breakdowns
 - **Account Management**: List all accounts and categories
 - **Date Range Options**: Download by specific dates or last N days
+- **Web Interface**: Modern web dashboard for easy access to all features
+
+## Web Application
+
+For the easiest experience, use the **web interface** instead of the command-line tools!
+
+### Quick Start
+
+1. Run the setup script:
+```bash
+./setup.sh
+```
+
+2. Start the web application:
+```bash
+./run_webapp.sh
+```
+
+3. Open your browser to: **http://localhost:8000**
+
+### Features
+
+The web interface provides a beautiful, user-friendly dashboard with:
+
+- **One-Click Login**: Easy authentication with optional headless mode
+- **Visual Dashboard**: All features accessible from a single page
+- **Account Explorer**: Browse all your accounts with one click
+- **Category Browser**: View all transaction categories
+- **Advanced Filtering**: Filter transactions by date, amount, category, merchant, and more
+- **Export Options**: Download as JSON or CSV directly from the browser
+- **Summary Statistics**: Get instant financial summaries and breakdowns
+- **No Command Line**: Everything through an intuitive web interface
+
+### Web Interface Screenshots
+
+The web app includes:
+- Clean, modern design with gradient styling
+- Responsive layout that works on mobile and desktop
+- Real-time status updates and error handling
+- Loading indicators for all operations
+- JSON preview in the browser or CSV downloads
+
+### API Documentation
+
+The web app also provides automatic API documentation at: **http://localhost:8000/docs**
+
+You can use the API endpoints programmatically if needed.
 
 ## Installation
 
@@ -55,6 +102,10 @@ SIMPLIFI_PASSWORD=your_password_here
 This application uses **Playwright** for browser automation to interact with Quicken Simplifi. All code is self-contained with **no third-party API dependencies** - the app simply automates a real browser just like you would use manually. This gives you complete control and transparency over how your data is accessed.
 
 ## Usage
+
+**Recommended**: Use the web interface (see [Web Application](#web-application) section above) for the easiest experience!
+
+For command-line usage, continue below:
 
 ### Basic Usage
 
@@ -194,10 +245,14 @@ python main.py --days 7 --account-id 12345 --category "Shopping" \
 
 ```
 .
+├── webapp.py                  # FastAPI web application (recommended)
+├── run_webapp.sh             # Web app startup script
 ├── main.py                    # CLI entry point
 ├── simplifi_client.py         # Quicken Simplifi API client
 ├── transaction_downloader.py  # Transaction download and parsing logic
+├── example_usage.py          # Usage examples
 ├── requirements.txt           # Python dependencies
+├── setup.sh                  # Setup script
 ├── .env.example              # Example environment configuration
 ├── .gitignore               # Git ignore rules
 └── README.md                # This file
@@ -293,10 +348,13 @@ Potential features for future development:
 - Budget tracking and alerts
 - Multi-account reconciliation
 - Recurring transaction detection
-- Spending trend visualization
+- Spending trend visualization with charts
 - Export to other formats (Excel, PDF)
 - Parallel account processing
 - Smart selector fallbacks
+- Enhanced web interface with charts and graphs
+- Real-time transaction monitoring
+- Automated reporting and scheduled exports
 
 ## Support
 
