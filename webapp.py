@@ -23,6 +23,11 @@ import secrets
 
 from simplifi_client import SimplifiClient
 from transaction_downloader import TransactionDownloader
+from report_builder import (
+    ReportBuilder,
+    ReportFilter,
+    TimeGrouping
+)
 
 # Load environment variables
 load_dotenv()
@@ -108,6 +113,35 @@ class TransactionRequest(BaseModel):
         if v is not None and info.data.get('min_amount') is not None:
             if v < info.data['min_amount']:
                 raise ValueError('max_amount must be greater than min_amount')
+        return v
+
+
+class ReportRequest(BaseModel):
+    """Request model for report generation"""
+    report_type: str = Field(..., pattern="^(profit_loss|cash_flow|category_analysis|merchant_analysis|trend_analysis|account_summary)$")
+    start_date: Optional[str] = Field(None, max_length=10)
+    end_date: Optional[str] = Field(None, max_length=10)
+    last_days: Optional[int] = Field(90, ge=1, le=3650)
+    min_amount: Optional[float] = Field(None, ge=-1_000_000_000, le=1_000_000_000)
+    max_amount: Optional[float] = Field(None, ge=-1_000_000_000, le=1_000_000_000)
+    categories: Optional[List[str]] = Field(None, max_length=100)
+    exclude_categories: Optional[List[str]] = Field(None, max_length=100)
+    merchants: Optional[List[str]] = Field(None, max_length=100)
+    exclude_merchants: Optional[List[str]] = Field(None, max_length=100)
+    accounts: Optional[List[str]] = Field(None, max_length=100)
+    description_contains: Optional[str] = Field(None, max_length=500)
+    notes_contains: Optional[str] = Field(None, max_length=500)
+    grouping: str = Field("monthly", pattern="^(daily|weekly|monthly|quarterly|yearly)$")
+    top_n: Optional[int] = Field(None, ge=1, le=1000)
+
+    @field_validator('start_date', 'end_date')
+    @classmethod
+    def validate_date_format(cls, v):
+        if v is not None and v != '':
+            try:
+                datetime.strptime(v, '%Y-%m-%d')
+            except ValueError:
+                raise ValueError('Invalid date format. Use YYYY-MM-DD')
         return v
 
 
@@ -807,6 +841,107 @@ async def get_summary(transaction_request: TransactionRequest, request: Request)
     except Exception as e:
         logger.error(f"Error generating summary: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while generating summary.")
+
+
+@app.post("/api/reports")
+async def generate_report(report_request: ReportRequest, request: Request):
+    """Generate financial reports"""
+    client = get_client_from_session(request)
+
+    try:
+        downloader = TransactionDownloader(client)
+
+        # Download transactions
+        transactions = downloader.download_transactions(
+            start_date=report_request.start_date,
+            end_date=report_request.end_date,
+            last_days=report_request.last_days
+        )
+
+        if not transactions:
+            return {
+                "report_type": report_request.report_type,
+                "error": "No transactions found",
+                "data": None
+            }
+
+        # Build filters
+        filters = ReportFilter(
+            start_date=report_request.start_date,
+            end_date=report_request.end_date,
+            min_amount=report_request.min_amount,
+            max_amount=report_request.max_amount,
+            categories=report_request.categories,
+            exclude_categories=report_request.exclude_categories,
+            merchants=report_request.merchants,
+            exclude_merchants=report_request.exclude_merchants,
+            accounts=report_request.accounts,
+            description_contains=report_request.description_contains,
+            notes_contains=report_request.notes_contains
+        )
+
+        # Initialize report builder
+        builder = ReportBuilder(transactions)
+
+        # Map grouping string to enum
+        grouping_map = {
+            'daily': TimeGrouping.DAILY,
+            'weekly': TimeGrouping.WEEKLY,
+            'monthly': TimeGrouping.MONTHLY,
+            'quarterly': TimeGrouping.QUARTERLY,
+            'yearly': TimeGrouping.YEARLY
+        }
+        grouping = grouping_map.get(report_request.grouping, TimeGrouping.MONTHLY)
+
+        # Generate appropriate report
+        report_data = None
+
+        if report_request.report_type == 'profit_loss':
+            report = builder.profit_and_loss(filters)
+            report_data = report.to_dict()
+
+        elif report_request.report_type == 'cash_flow':
+            report = builder.cash_flow(filters, grouping)
+            report_data = report.to_dict()
+
+        elif report_request.report_type == 'category_analysis':
+            report = builder.category_analysis(filters, report_request.top_n)
+            report_data = report.to_dict()
+
+        elif report_request.report_type == 'merchant_analysis':
+            top_n = report_request.top_n or 20
+            report = builder.merchant_analysis(filters, top_n)
+            report_data = report.to_dict()
+
+        elif report_request.report_type == 'trend_analysis':
+            report = builder.trend_analysis(filters, grouping)
+            report_data = report.to_dict()
+
+        elif report_request.report_type == 'account_summary':
+            report = builder.account_summary(filters)
+            report_data = report.to_dict()
+
+        return {
+            "report_type": report_request.report_type,
+            "data": report_data,
+            "filters_applied": {
+                "start_date": report_request.start_date,
+                "end_date": report_request.end_date,
+                "last_days": report_request.last_days,
+                "min_amount": report_request.min_amount,
+                "max_amount": report_request.max_amount,
+                "categories": report_request.categories,
+                "exclude_categories": report_request.exclude_categories,
+                "grouping": report_request.grouping,
+                "top_n": report_request.top_n
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating report: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An error occurred while generating the report: {str(e)}")
 
 
 @app.post("/api/logout")
