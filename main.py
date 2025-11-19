@@ -11,6 +11,111 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from simplifi_client import SimplifiClient
 from transaction_downloader import TransactionDownloader
+from report_builder import (
+    ReportBuilder,
+    ReportFilter,
+    ReportType,
+    TimeGrouping
+)
+
+
+def generate_report(transactions, args):
+    """Generate and display financial report"""
+    print(f"\nGenerating {args.report.replace('_', ' ').title()} report...")
+
+    # Build filters
+    filters = ReportFilter(
+        start_date=args.start_date,
+        end_date=args.end_date,
+        min_amount=args.min_amount,
+        max_amount=args.max_amount,
+        description_contains=args.description,
+        notes_contains=getattr(args, 'notes_contains', None)
+    )
+
+    # Parse category filter
+    if args.category:
+        filters.categories = [args.category]
+
+    # Parse exclude categories
+    if getattr(args, 'exclude_categories', None):
+        filters.exclude_categories = [
+            cat.strip() for cat in args.exclude_categories.split(',')
+        ]
+
+    # Parse merchant filter
+    if args.merchant:
+        filters.merchants = [args.merchant]
+
+    # Parse exclude merchants
+    if getattr(args, 'exclude_merchants', None):
+        filters.exclude_merchants = [
+            merch.strip() for merch in args.exclude_merchants.split(',')
+        ]
+
+    # Initialize report builder
+    builder = ReportBuilder(transactions)
+
+    # Map grouping string to enum
+    grouping_map = {
+        'daily': TimeGrouping.DAILY,
+        'weekly': TimeGrouping.WEEKLY,
+        'monthly': TimeGrouping.MONTHLY,
+        'quarterly': TimeGrouping.QUARTERLY,
+        'yearly': TimeGrouping.YEARLY
+    }
+    grouping = grouping_map.get(args.grouping, TimeGrouping.MONTHLY)
+
+    # Generate appropriate report
+    report = None
+
+    if args.report == 'profit_loss':
+        report = builder.profit_and_loss(filters)
+        report.print_summary()
+
+    elif args.report == 'cash_flow':
+        report = builder.cash_flow(filters, grouping)
+        report.print_summary()
+
+    elif args.report == 'category_analysis':
+        top_n = getattr(args, 'top_n', None)
+        report = builder.category_analysis(filters, top_n)
+        report.print_summary()
+
+    elif args.report == 'merchant_analysis':
+        top_n = getattr(args, 'top_n', 20)
+        report = builder.merchant_analysis(filters, top_n)
+        report.print_summary()
+
+    elif args.report == 'trend_analysis':
+        report = builder.trend_analysis(filters, grouping)
+        report.print_summary()
+
+    elif args.report == 'account_summary':
+        report = builder.account_summary(filters)
+        report.print_summary()
+
+    # Save report to file
+    if report:
+        output_file = args.report_output
+
+        if not output_file:
+            # Auto-generate filename
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_file = f"{args.report}_{timestamp}.json"
+
+        # Ensure reports directory exists
+        os.makedirs('reports', exist_ok=True)
+
+        # Add reports/ prefix if not already there
+        if not output_file.startswith('reports/'):
+            output_file = f"reports/{output_file}"
+
+        # Save as JSON
+        with open(output_file, 'w') as f:
+            f.write(report.to_json())
+
+        print(f"\nReport saved to: {output_file}")
 
 
 def main():
@@ -44,6 +149,21 @@ Examples:
 
   # Download from specific account
   python main.py --account-id 12345 --days 60
+
+  # Generate Profit & Loss report for last 90 days
+  python main.py --report profit_loss --days 90
+
+  # Generate monthly cash flow report
+  python main.py --report cash_flow --grouping monthly --days 365
+
+  # Category analysis for expenses only (top 10)
+  python main.py --report category_analysis --max-amount -0.01 --top-n 10
+
+  # Merchant analysis excluding transfers
+  python main.py --report merchant_analysis --exclude-categories Transfer,Payment --days 30
+
+  # Trend analysis with quarterly grouping
+  python main.py --report trend_analysis --grouping quarterly --start-date 2025-01-01
         """
     )
 
@@ -112,6 +232,42 @@ Examples:
     filter_group.add_argument(
         '--description',
         help='Filter by description (partial match)'
+    )
+    filter_group.add_argument(
+        '--exclude-categories',
+        help='Exclude categories (comma-separated list)'
+    )
+    filter_group.add_argument(
+        '--exclude-merchants',
+        help='Exclude merchants (comma-separated list)'
+    )
+    filter_group.add_argument(
+        '--notes-contains',
+        help='Filter by notes containing text'
+    )
+
+    # Report options
+    report_group = parser.add_argument_group('reports')
+    report_group.add_argument(
+        '--report',
+        choices=['profit_loss', 'cash_flow', 'category_analysis',
+                'merchant_analysis', 'trend_analysis', 'account_summary'],
+        help='Generate a financial report'
+    )
+    report_group.add_argument(
+        '--grouping',
+        choices=['daily', 'weekly', 'monthly', 'quarterly', 'yearly'],
+        default='monthly',
+        help='Time grouping for cash flow and trend reports (default: monthly)'
+    )
+    report_group.add_argument(
+        '--top-n',
+        type=int,
+        help='Limit to top N categories or merchants in analysis reports'
+    )
+    report_group.add_argument(
+        '--report-output',
+        help='Output filename for report (auto-generated if not specified)'
     )
 
     # Output options
@@ -232,7 +388,7 @@ def run_commands(client: SimplifiClient, args):
             print("No transactions found for the specified criteria.")
             return
 
-        # Apply filters
+        # Apply filters (for backward compatibility with old filter system)
         if any([args.min_amount, args.max_amount, args.category, args.merchant, args.description]):
             print("\nApplying filters...")
             original_count = len(transactions)
@@ -245,6 +401,11 @@ def run_commands(client: SimplifiClient, args):
                 description=args.description
             )
             print(f"Filtered from {original_count} to {len(transactions)} transactions")
+
+        # Handle report generation
+        if args.report:
+            generate_report(transactions, args)
+            return
 
         # Display summary if requested
         if args.summary:
