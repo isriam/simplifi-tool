@@ -3,16 +3,23 @@ FastAPI Web Application for Quicken Simplifi Transaction Downloader
 Provides a web interface to run all Python scripts and functions.
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, field_validator, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import os
 import json
 import uvicorn
 from dotenv import load_dotenv
+import logging
+import secrets
 
 from simplifi_client import SimplifiClient
 from transaction_downloader import TransactionDownloader
@@ -20,34 +27,112 @@ from transaction_downloader import TransactionDownloader
 # Load environment variables
 load_dotenv()
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Middleware to add security headers to all responses"""
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['X-XSS-Protection'] = '1; mode=block'
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+        response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+        return response
+
 app = FastAPI(title="Quicken Simplifi Transaction Downloader", version="1.0.0")
 
-# Global client instance (will be initialized on login)
-client_instance = None
+# Add security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Add rate limiting
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Add session middleware with secure secret key
+SESSION_SECRET_KEY = os.getenv('SESSION_SECRET_KEY', secrets.token_urlsafe(32))
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET_KEY, max_age=3600)
+
+# Session store for client instances (replaces global variable)
+# In production, consider using Redis or similar
+user_sessions: Dict[str, SimplifiClient] = {}
 
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: EmailStr  # Validates email format
+    password: str = Field(..., min_length=1, max_length=500)
     headless: bool = True
+
+    @field_validator('password')
+    @classmethod
+    def validate_password_length(cls, v):
+        if len(v) > 500:
+            raise ValueError('Password too long')
+        return v
 
 
 class TransactionRequest(BaseModel):
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    last_days: Optional[int] = 30
-    account_id: Optional[str] = None
-    min_amount: Optional[float] = None
-    max_amount: Optional[float] = None
-    category: Optional[str] = None
-    merchant: Optional[str] = None
-    description: Optional[str] = None
-    format: str = "json"  # json or csv
+    start_date: Optional[str] = Field(None, max_length=10)
+    end_date: Optional[str] = Field(None, max_length=10)
+    last_days: Optional[int] = Field(30, ge=1, le=3650)
+    account_id: Optional[str] = Field(None, max_length=500)
+    min_amount: Optional[float] = Field(None, ge=-1_000_000_000, le=1_000_000_000)
+    max_amount: Optional[float] = Field(None, ge=-1_000_000_000, le=1_000_000_000)
+    category: Optional[str] = Field(None, max_length=500)
+    merchant: Optional[str] = Field(None, max_length=500)
+    description: Optional[str] = Field(None, max_length=500)
+    format: str = Field("json", pattern="^(json|csv)$")
+
+    @field_validator('start_date', 'end_date')
+    @classmethod
+    def validate_date_format(cls, v):
+        if v is not None and v != '':
+            try:
+                datetime.strptime(v, '%Y-%m-%d')
+            except ValueError:
+                raise ValueError('Invalid date format. Use YYYY-MM-DD')
+        return v
+
+    @field_validator('max_amount')
+    @classmethod
+    def validate_amount_range(cls, v, info):
+        if v is not None and info.data.get('min_amount') is not None:
+            if v < info.data['min_amount']:
+                raise ValueError('max_amount must be greater than min_amount')
+        return v
 
 
 class SessionStatus(BaseModel):
     logged_in: bool
     message: str
+
+
+def get_client_from_session(request: Request) -> SimplifiClient:
+    """Get the client instance from the user's session"""
+    session_id = request.session.get('session_id')
+    if not session_id or session_id not in user_sessions:
+        raise HTTPException(status_code=401, detail="Not logged in. Please login first.")
+    return user_sessions[session_id]
+
+
+def cleanup_session(session_id: str):
+    """Clean up a user session and close the browser"""
+    if session_id in user_sessions:
+        try:
+            user_sessions[session_id].close()
+        except Exception as e:
+            logger.error(f"Error closing client for session {session_id}: {e}")
+        finally:
+            del user_sessions[session_id]
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -373,7 +458,11 @@ async def read_root():
                 const data = await response.json();
 
                 if (response.ok) {
-                    resultsDiv.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                    // Safe approach to prevent XSS
+                    const pre = document.createElement('pre');
+                    pre.textContent = JSON.stringify(data, null, 2);
+                    resultsDiv.innerHTML = '';
+                    resultsDiv.appendChild(pre);
                     resultsDiv.classList.remove('hidden');
                     showStatus('Accounts loaded successfully', 'success');
                 } else {
@@ -396,7 +485,11 @@ async def read_root():
                 const data = await response.json();
 
                 if (response.ok) {
-                    resultsDiv.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                    // Safe approach to prevent XSS
+                    const pre = document.createElement('pre');
+                    pre.textContent = JSON.stringify(data, null, 2);
+                    resultsDiv.innerHTML = '';
+                    resultsDiv.appendChild(pre);
                     resultsDiv.classList.remove('hidden');
                     showStatus('Categories loaded successfully', 'success');
                 } else {
@@ -439,7 +532,11 @@ async def read_root():
 
                     if (contentType.includes('application/json')) {
                         const data = await response.json();
-                        resultsDiv.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                        // Safe approach to prevent XSS
+                        const pre = document.createElement('pre');
+                        pre.textContent = JSON.stringify(data, null, 2);
+                        resultsDiv.innerHTML = '';
+                        resultsDiv.appendChild(pre);
                         resultsDiv.classList.remove('hidden');
                         showStatus(`Downloaded ${data.transactions.length} transactions`, 'success');
                     } else if (contentType.includes('text/csv')) {
@@ -484,7 +581,11 @@ async def read_root():
                 const data = await response.json();
 
                 if (response.ok) {
-                    resultsDiv.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                    // Safe approach to prevent XSS
+                    const pre = document.createElement('pre');
+                    pre.textContent = JSON.stringify(data, null, 2);
+                    resultsDiv.innerHTML = '';
+                    resultsDiv.appendChild(pre);
                     resultsDiv.classList.remove('hidden');
                     showStatus('Summary generated successfully', 'success');
                 } else {
@@ -523,13 +624,8 @@ async def read_root():
             }
         }
 
-        // Load email from env if available
-        window.addEventListener('DOMContentLoaded', async () => {
-            const envEmail = '""" + os.getenv('SIMPLIFI_EMAIL', '') + """';
-            if (envEmail) {
-                document.getElementById('email').value = envEmail;
-            }
-        });
+        // Note: Email pre-fill removed for security reasons
+        // Users should enter credentials manually
     </script>
 </body>
 </html>
@@ -537,101 +633,106 @@ async def read_root():
 
 
 @app.get("/api/status")
-async def get_status():
+async def get_status(request: Request):
     """Check if user is logged in"""
-    global client_instance
+    session_id = request.session.get('session_id')
+    logged_in = session_id is not None and session_id in user_sessions
     return SessionStatus(
-        logged_in=client_instance is not None,
-        message="Logged in" if client_instance else "Not logged in"
+        logged_in=logged_in,
+        message="Logged in" if logged_in else "Not logged in"
     )
 
 
 @app.post("/api/login")
-async def login(request: LoginRequest):
+@limiter.limit("5/minute")  # Max 5 login attempts per minute per IP
+async def login(login_request: LoginRequest, request: Request):
     """Login to Quicken Simplifi"""
-    global client_instance
-
     try:
-        if client_instance:
-            client_instance.close()
+        # Clean up any existing session for this user
+        old_session_id = request.session.get('session_id')
+        if old_session_id:
+            cleanup_session(old_session_id)
 
-        client_instance = SimplifiClient(headless=request.headless)
-        client_instance._start_browser()
+        # Create new client instance
+        client = SimplifiClient(headless=login_request.headless)
+        client._start_browser()
 
-        success = client_instance.login(request.email, request.password)
+        success = client.login(login_request.email, login_request.password)
 
         if success:
+            # Create new session ID and store the client
+            session_id = secrets.token_urlsafe(32)
+            user_sessions[session_id] = client
+            request.session['session_id'] = session_id
+
+            logger.info(f"Successful login for user: {login_request.email}")
             return {"message": "Login successful! Dashboard is now available."}
         else:
-            client_instance = None
+            client.close()
+            logger.warning(f"Failed login attempt for user: {login_request.email}")
             raise HTTPException(status_code=401, detail="Login failed. Please check credentials.")
 
+    except HTTPException:
+        raise
     except Exception as e:
-        client_instance = None
-        raise HTTPException(status_code=500, detail=f"Login error: {str(e)}")
+        logger.error(f"Login error for {login_request.email}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred during login. Please try again.")
 
 
 @app.get("/api/accounts")
-async def get_accounts():
+async def get_accounts(request: Request):
     """Get list of all accounts"""
-    global client_instance
-
-    if not client_instance:
-        raise HTTPException(status_code=401, detail="Not logged in")
+    client = get_client_from_session(request)
 
     try:
-        accounts = client_instance.get_accounts()
+        accounts = client.get_accounts()
         return {"accounts": accounts, "count": len(accounts)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching accounts: {str(e)}")
+        logger.error(f"Error fetching accounts: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred while fetching accounts.")
 
 
 @app.get("/api/categories")
-async def get_categories():
+async def get_categories(request: Request):
     """Get list of all categories"""
-    global client_instance
-
-    if not client_instance:
-        raise HTTPException(status_code=401, detail="Not logged in")
+    client = get_client_from_session(request)
 
     try:
         # This is a placeholder - implement category fetching in SimplifiClient if needed
         return {"message": "Category listing not yet implemented in SimplifiClient", "categories": []}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching categories: {str(e)}")
+        logger.error(f"Error fetching categories: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred while fetching categories.")
 
 
 @app.post("/api/transactions")
-async def download_transactions(request: TransactionRequest):
+async def download_transactions(transaction_request: TransactionRequest, request: Request):
     """Download and filter transactions"""
-    global client_instance
-
-    if not client_instance:
-        raise HTTPException(status_code=401, detail="Not logged in")
+    client = get_client_from_session(request)
 
     try:
-        downloader = TransactionDownloader(client_instance)
+        downloader = TransactionDownloader(client)
 
         # Download transactions
         transactions = downloader.download_transactions(
-            start_date=request.start_date,
-            end_date=request.end_date,
-            last_days=request.last_days,
-            account_id=request.account_id
+            start_date=transaction_request.start_date,
+            end_date=transaction_request.end_date,
+            last_days=transaction_request.last_days,
+            account_id=transaction_request.account_id
         )
 
         # Apply filters
         filtered = downloader.filter_transactions(
             transactions,
-            min_amount=request.min_amount,
-            max_amount=request.max_amount,
-            category=request.category,
-            merchant=request.merchant,
-            description=request.description
+            min_amount=transaction_request.min_amount,
+            max_amount=transaction_request.max_amount,
+            category=transaction_request.category,
+            merchant=transaction_request.merchant,
+            description=transaction_request.description
         )
 
         # Export based on format
-        if request.format.lower() == 'csv':
+        if transaction_request.format.lower() == 'csv':
             filename = f"transactions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             downloader.export_to_csv(filtered, filename)
             return FileResponse(
@@ -644,49 +745,49 @@ async def download_transactions(request: TransactionRequest):
                 "transactions": filtered,
                 "count": len(filtered),
                 "filters_applied": {
-                    "start_date": request.start_date,
-                    "end_date": request.end_date,
-                    "last_days": request.last_days,
-                    "account_id": request.account_id,
-                    "min_amount": request.min_amount,
-                    "max_amount": request.max_amount,
-                    "category": request.category,
-                    "merchant": request.merchant,
-                    "description": request.description
+                    "start_date": transaction_request.start_date,
+                    "end_date": transaction_request.end_date,
+                    "last_days": transaction_request.last_days,
+                    "account_id": transaction_request.account_id,
+                    "min_amount": transaction_request.min_amount,
+                    "max_amount": transaction_request.max_amount,
+                    "category": transaction_request.category,
+                    "merchant": transaction_request.merchant,
+                    "description": transaction_request.description
                 }
             }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error downloading transactions: {str(e)}")
+        logger.error(f"Error downloading transactions: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred while downloading transactions.")
 
 
 @app.post("/api/summary")
-async def get_summary(request: TransactionRequest):
+async def get_summary(transaction_request: TransactionRequest, request: Request):
     """Get transaction summary statistics"""
-    global client_instance
-
-    if not client_instance:
-        raise HTTPException(status_code=401, detail="Not logged in")
+    client = get_client_from_session(request)
 
     try:
-        downloader = TransactionDownloader(client_instance)
+        downloader = TransactionDownloader(client)
 
         # Download transactions
         transactions = downloader.download_transactions(
-            start_date=request.start_date,
-            end_date=request.end_date,
-            last_days=request.last_days,
-            account_id=request.account_id
+            start_date=transaction_request.start_date,
+            end_date=transaction_request.end_date,
+            last_days=transaction_request.last_days,
+            account_id=transaction_request.account_id
         )
 
         # Apply filters
         filtered = downloader.filter_transactions(
             transactions,
-            min_amount=request.min_amount,
-            max_amount=request.max_amount,
-            category=request.category,
-            merchant=request.merchant,
-            description=request.description
+            min_amount=transaction_request.min_amount,
+            max_amount=transaction_request.max_amount,
+            category=transaction_request.category,
+            merchant=transaction_request.merchant,
+            description=transaction_request.description
         )
 
         # Get summary
@@ -696,27 +797,31 @@ async def get_summary(request: TransactionRequest):
             "summary": summary,
             "transaction_count": len(filtered),
             "date_range": {
-                "start": request.start_date or f"Last {request.last_days} days",
-                "end": request.end_date or "Today"
+                "start": transaction_request.start_date or f"Last {transaction_request.last_days} days",
+                "end": transaction_request.end_date or "Today"
             }
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating summary: {str(e)}")
+        logger.error(f"Error generating summary: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred while generating summary.")
 
 
 @app.post("/api/logout")
-async def logout():
+async def logout(request: Request):
     """Logout and close browser"""
-    global client_instance
-
     try:
-        if client_instance:
-            client_instance.close()
-            client_instance = None
+        session_id = request.session.get('session_id')
+        if session_id:
+            cleanup_session(session_id)
+            request.session.clear()
+            logger.info(f"User logged out successfully")
         return {"message": "Logged out successfully"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error during logout: {str(e)}")
+        logger.error(f"Error during logout: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred during logout.")
 
 
 if __name__ == "__main__":

@@ -53,10 +53,21 @@ class SimplifiClient:
         if not self.playwright:
             self.playwright = sync_playwright().start()
             self.browser = self.playwright.chromium.launch(headless=self.headless)
+            # Enhanced security configuration for browser context
             self.context = self.browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                # Remove user agent spoofing for transparency
+                ignore_https_errors=False,  # Enforce SSL validation
+                java_script_enabled=True,
+                accept_downloads=False,  # Prevent unexpected file downloads
+                bypass_csp=False,  # Respect Content Security Policy
+                locale='en-US',
+                timezone_id='America/New_York',
+                record_video_dir=None,  # Don't record sensitive sessions
+                record_har_path=None,  # Don't record network traffic
             )
+            # Set reasonable timeout for network requests
+            self.context.set_default_timeout(30000)  # 30 seconds
             self.page = self.context.new_page()
 
     def close(self):
