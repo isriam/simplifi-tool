@@ -105,49 +105,191 @@ class SimplifiClient:
             print(f"Navigating to login page...")
             await self.page.goto(self.LOGIN_URL, wait_until='networkidle')
 
-            # Wait for login form to be visible
+            # Wait for page to fully load
+            await asyncio.sleep(2)
+
+            # Take a screenshot for debugging
+            if not self.headless:
+                try:
+                    await self.page.screenshot(path='login_page.png')
+                    print("Screenshot saved to login_page.png for debugging")
+                except:
+                    pass
+
+            # Try to find the email input field with multiple selectors and longer timeout
             print("Waiting for login form...")
-            await self.page.wait_for_selector('input[type="email"], input[name="email"]', timeout=10000)
+            email_selector = None
+            potential_email_selectors = [
+                'input[type="email"]',
+                'input[name="email"]',
+                'input[id="email"]',
+                'input[placeholder*="email" i]',
+                'input[placeholder*="Email" i]',
+                '#email',
+                '#Email',
+                '#emailAddress',
+                '[data-testid*="email"]',
+                'input[autocomplete="email"]'
+            ]
+
+            # Try each selector
+            for selector in potential_email_selectors:
+                try:
+                    await self.page.wait_for_selector(selector, timeout=5000, state='visible')
+                    email_selector = selector
+                    print(f"Found email input with selector: {selector}")
+                    break
+                except:
+                    continue
+
+            if not email_selector:
+                # If we can't find the email input, save debug info
+                print("❌ Could not find email input field")
+                await self.page.screenshot(path='login_failed.png')
+                print("Screenshot saved to login_failed.png")
+
+                # Print page content for debugging
+                page_content = await self.page.content()
+                with open('login_page.html', 'w', encoding='utf-8') as f:
+                    f.write(page_content)
+                print("Page HTML saved to login_page.html for debugging")
+
+                # Check if there's an OAuth or SSO button instead
+                oauth_buttons = await self.page.locator('button:has-text("Sign in"), button:has-text("Log in"), a:has-text("Sign in"), a:has-text("Log in")').count()
+                if oauth_buttons > 0:
+                    print(f"⚠️  Found {oauth_buttons} login button(s) - this may be an OAuth/SSO login flow")
+                    print("Please run with headless=False to complete login manually")
+
+                    # If not headless, wait for user to complete login manually
+                    if not self.headless:
+                        print("\n" + "="*60)
+                        print("MANUAL LOGIN REQUIRED")
+                        print("="*60)
+                        print("Please complete the login in the browser window.")
+                        print("Waiting up to 120 seconds for you to log in...")
+                        print("="*60 + "\n")
+
+                        # Wait for user to complete login
+                        start_time = time.time()
+                        while time.time() - start_time < 120:
+                            current_url = self.page.url
+                            if 'login' not in current_url.lower():
+                                print("✓ Login successful (detected by URL change)")
+                                self.is_logged_in = True
+                                return True
+                            await asyncio.sleep(2)
+
+                        print("✗ Login timeout - please try again")
+                        return False
+
+                return False
 
             # Fill in email
-            print("Entering credentials...")
-            email_selector = 'input[type="email"], input[name="email"]'
+            print(f"Entering email...")
             await self.page.fill(email_selector, self.email)
 
-            # Fill in password
-            password_selector = 'input[type="password"], input[name="password"]'
+            # Wait a bit for any dynamic form updates
+            await asyncio.sleep(1)
+
+            # Find and fill password field
+            password_selector = None
+            potential_password_selectors = [
+                'input[type="password"]',
+                'input[name="password"]',
+                'input[id="password"]',
+                '#password',
+                '#Password',
+                '[data-testid*="password"]',
+                'input[autocomplete="current-password"]'
+            ]
+
+            for selector in potential_password_selectors:
+                try:
+                    await self.page.wait_for_selector(selector, timeout=5000, state='visible')
+                    password_selector = selector
+                    print(f"Found password input with selector: {selector}")
+                    break
+                except:
+                    continue
+
+            if not password_selector:
+                print("❌ Could not find password input field")
+                await self.page.screenshot(path='login_no_password.png')
+                return False
+
+            print("Entering password...")
             await self.page.fill(password_selector, self.password)
+
+            # Wait a bit before submitting
+            await asyncio.sleep(1)
 
             # Submit the form
             print("Submitting login form...")
-            submit_button = 'button[type="submit"], button:has-text("Log in"), button:has-text("Sign in")'
-            await self.page.click(submit_button)
+            submit_selectors = [
+                'button[type="submit"]',
+                'button:has-text("Log in")',
+                'button:has-text("Sign in")',
+                'input[type="submit"]',
+                'button:has-text("Continue")',
+                '[data-testid*="submit"]',
+                '[data-testid*="login"]'
+            ]
+
+            submitted = False
+            for selector in submit_selectors:
+                try:
+                    if await self.page.locator(selector).count() > 0:
+                        await self.page.click(selector)
+                        print(f"Clicked submit button: {selector}")
+                        submitted = True
+                        break
+                except:
+                    continue
+
+            if not submitted:
+                # Try pressing Enter as fallback
+                print("Trying to submit by pressing Enter...")
+                await self.page.press(password_selector, 'Enter')
 
             # Wait for navigation after login
-            # We'll wait for either the dashboard or an error message
             try:
-                # Wait for post-login page to load
-                await self.page.wait_for_load_state('networkidle', timeout=15000)
+                print("Waiting for login to complete...")
+                await self.page.wait_for_load_state('networkidle', timeout=30000)
 
-                # Check if we're logged in by looking for common dashboard elements
-                # This might need adjustment based on actual Simplifi UI
-                await asyncio.sleep(2)  # Give page time to fully render
+                # Additional wait for any redirects
+                await asyncio.sleep(3)
 
                 current_url = self.page.url
-                if 'login' not in current_url.lower() or 'dashboard' in current_url.lower():
+                print(f"Current URL after login: {current_url}")
+
+                # Check if we're logged in
+                if 'login' not in current_url.lower():
                     print("✓ Login successful")
                     self.is_logged_in = True
                     return True
                 else:
-                    print("✗ Login failed - still on login page")
+                    # Check for error messages
+                    error_elements = await self.page.locator('[class*="error"], [class*="Error"], [role="alert"]').count()
+                    if error_elements > 0:
+                        print("✗ Login failed - error message detected")
+                    else:
+                        print("✗ Login failed - still on login page")
+
+                    await self.page.screenshot(path='login_failed_after_submit.png')
                     return False
 
             except Exception as e:
                 print(f"Error during login verification: {e}")
+                await self.page.screenshot(path='login_error.png')
                 return False
 
         except Exception as e:
-            print(f"Login failed: {e}")
+            print(f"Login failed with exception: {e}")
+            if self.page:
+                try:
+                    await self.page.screenshot(path='login_exception.png')
+                except:
+                    pass
             return False
 
     async def wait_for_2fa(self, timeout: int = 120):
