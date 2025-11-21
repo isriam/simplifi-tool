@@ -70,6 +70,8 @@ app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET_KEY, max_age=360
 # Session store for client instances (replaces global variable)
 # In production, consider using Redis or similar
 user_sessions: Dict[str, SimplifiClient] = {}
+session_timestamps: Dict[str, datetime] = {}  # Track session creation time
+SESSION_TIMEOUT_MINUTES = 60  # Sessions expire after 1 hour
 
 
 class LoginRequest(BaseModel):
@@ -155,6 +157,15 @@ def get_client_from_session(request: Request) -> SimplifiClient:
     session_id = request.session.get('session_id')
     if not session_id or session_id not in user_sessions:
         raise HTTPException(status_code=401, detail="Not logged in. Please login first.")
+
+    # Check if session has expired
+    if session_id in session_timestamps:
+        session_age = datetime.now() - session_timestamps[session_id]
+        if session_age.total_seconds() > (SESSION_TIMEOUT_MINUTES * 60):
+            cleanup_session(session_id)
+            request.session.clear()
+            raise HTTPException(status_code=401, detail="Session expired. Please login again.")
+
     return user_sessions[session_id]
 
 
@@ -167,6 +178,30 @@ def cleanup_session(session_id: str):
             logger.error(f"Error closing client for session {session_id}: {e}")
         finally:
             del user_sessions[session_id]
+
+    # Also remove timestamp
+    if session_id in session_timestamps:
+        del session_timestamps[session_id]
+
+
+def cleanup_expired_sessions():
+    """Background task to clean up expired sessions"""
+    logger.info("Running session cleanup task...")
+    expired_sessions = []
+
+    for session_id, timestamp in session_timestamps.items():
+        session_age = datetime.now() - timestamp
+        if session_age.total_seconds() > (SESSION_TIMEOUT_MINUTES * 60):
+            expired_sessions.append(session_id)
+
+    for session_id in expired_sessions:
+        logger.info(f"Cleaning up expired session: {session_id}")
+        cleanup_session(session_id)
+
+    if expired_sessions:
+        logger.info(f"Cleaned up {len(expired_sessions)} expired session(s)")
+
+    return len(expired_sessions)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -688,15 +723,20 @@ async def login(login_request: LoginRequest, request: Request):
             cleanup_session(old_session_id)
 
         # Create new client instance
-        client = SimplifiClient(headless=login_request.headless)
+        client = SimplifiClient(
+            email=login_request.email,
+            password=login_request.password,
+            headless=login_request.headless
+        )
         client._start_browser()
 
-        success = client.login(login_request.email, login_request.password)
+        success = client.login()
 
         if success:
             # Create new session ID and store the client
             session_id = secrets.token_urlsafe(32)
             user_sessions[session_id] = client
+            session_timestamps[session_id] = datetime.now()  # Track session creation
             request.session['session_id'] = session_id
 
             logger.info(f"Successful login for user: {login_request.email}")
@@ -751,7 +791,7 @@ async def download_transactions(transaction_request: TransactionRequest, request
         transactions = downloader.download_transactions(
             start_date=transaction_request.start_date,
             end_date=transaction_request.end_date,
-            last_days=transaction_request.last_days,
+            days=transaction_request.last_days,
             account_id=transaction_request.account_id
         )
 
@@ -810,7 +850,7 @@ async def get_summary(transaction_request: TransactionRequest, request: Request)
         transactions = downloader.download_transactions(
             start_date=transaction_request.start_date,
             end_date=transaction_request.end_date,
-            last_days=transaction_request.last_days,
+            days=transaction_request.last_days,
             account_id=transaction_request.account_id
         )
 
@@ -855,7 +895,7 @@ async def generate_report(report_request: ReportRequest, request: Request):
         transactions = downloader.download_transactions(
             start_date=report_request.start_date,
             end_date=report_request.end_date,
-            last_days=report_request.last_days
+            days=report_request.last_days
         )
 
         if not transactions:

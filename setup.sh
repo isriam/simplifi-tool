@@ -17,9 +17,41 @@ fi
 echo "✓ Python 3 found: $(python3 --version)"
 echo ""
 
+# Create virtual environment if it doesn't exist
+if [ ! -d "venv" ]; then
+    echo "Creating virtual environment..."
+    python3 -m venv venv
+
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to create virtual environment."
+        exit 1
+    fi
+
+    echo "✓ Virtual environment created"
+else
+    echo "✓ Virtual environment already exists"
+fi
+echo ""
+
+# Activate virtual environment
+echo "Activating virtual environment..."
+source venv/bin/activate
+
+if [ $? -ne 0 ]; then
+    echo "ERROR: Failed to activate virtual environment."
+    exit 1
+fi
+
+echo "✓ Virtual environment activated"
+echo ""
+
+# Upgrade pip
+echo "Upgrading pip..."
+pip install --upgrade pip
+
 # Install Python dependencies
-echo "Installing Python dependencies..."
-pip3 install -r requirements.txt
+echo "Installing Python dependencies into virtual environment..."
+pip install -r requirements.txt
 
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to install Python dependencies."
@@ -57,7 +89,7 @@ else
 fi
 
 # Make scripts executable
-chmod +x main.py example_usage.py
+chmod +x main.py example_usage.py run_webapp.sh
 
 echo "========================================="
 echo "Setup complete!"
@@ -65,8 +97,18 @@ echo "========================================="
 echo ""
 echo "Next steps:"
 echo "  1. Edit .env file with your Simplifi credentials"
-echo "  2. Run: python3 main.py --help"
-echo "  3. Try: python3 main.py --show-browser --days 7"
+echo ""
+echo "To use the web interface (recommended):"
+echo "  ./run_webapp.sh"
+echo "  Then open: http://localhost:8000"
+echo ""
+echo "To use the command line:"
+echo "  source venv/bin/activate"
+echo "  python main.py --help"
+echo "  python main.py --show-browser --days 7"
 echo ""
 echo "For 2FA accounts, always use --show-browser flag"
+echo ""
+echo "Note: Always activate the virtual environment first:"
+echo "  source venv/bin/activate"
 echo ""
