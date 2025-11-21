@@ -19,17 +19,24 @@ For the easiest experience, use the **web interface** instead of the command-lin
 
 ### Quick Start
 
-1. Run the setup script:
+1. Run the setup script (creates venv and installs dependencies):
 ```bash
 ./setup.sh
 ```
 
-2. Start the web application:
+2. Edit `.env` with your Simplifi credentials:
+```bash
+nano .env
+```
+
+3. Start the web application:
 ```bash
 ./run_webapp.sh
 ```
 
-3. Open your browser to: **http://localhost:8000**
+4. Open your browser to: **http://localhost:8000**
+
+The `run_webapp.sh` script automatically activates the virtual environment for you.
 
 ### Features
 
@@ -66,36 +73,81 @@ You can use the API endpoints programmatically if needed.
 - Python 3.7 or higher
 - Quicken Simplifi account
 
-### Setup
+### Quick Setup (Recommended)
 
-1. Clone this repository:
+The easiest way to install is using the provided setup script, which creates a virtual environment and installs all dependencies:
+
 ```bash
+# Clone the repository
 git clone <repository-url>
-cd testing
+cd simplifi-tool
+
+# Run the setup script
+./setup.sh
 ```
 
-2. Install dependencies:
+The setup script will:
+- Create a Python virtual environment (`venv/`)
+- Install all Python dependencies inside the venv
+- Install Playwright browsers
+- Create a `.env` file from the template
+
+After running setup, edit the `.env` file with your credentials:
 ```bash
-pip install -r requirements.txt
+nano .env  # or use your preferred editor
 ```
 
-3. Install Playwright browsers:
-```bash
-playwright install chromium
-```
-
-4. Configure your credentials:
-```bash
-cp .env.example .env
-```
-
-5. Edit `.env` and add your Quicken Simplifi credentials:
+Add your Simplifi credentials:
 ```
 SIMPLIFI_EMAIL=your_email@example.com
 SIMPLIFI_PASSWORD=your_password_here
 ```
 
-**Note**: The `.env` file is gitignored to protect your credentials.
+### Manual Setup
+
+If you prefer to set up manually:
+
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd simplifi-tool
+```
+
+2. Create a virtual environment:
+```bash
+python3 -m venv venv
+```
+
+3. Activate the virtual environment:
+```bash
+# On Linux/Mac:
+source venv/bin/activate
+
+# On Windows:
+venv\Scripts\activate
+```
+
+4. Install dependencies:
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+5. Install Playwright browsers:
+```bash
+playwright install chromium
+```
+
+6. Configure your credentials:
+```bash
+cp .env.example .env
+# Edit .env and add your credentials
+```
+
+**Important Notes:**
+- The `.env` file is gitignored to protect your credentials
+- Always activate the virtual environment before running the application
+- The virtual environment isolates dependencies from your system Python
 
 ### Important: Browser Automation
 
@@ -109,6 +161,11 @@ For command-line usage, continue below:
 
 ### Basic Usage
 
+First, activate the virtual environment:
+```bash
+source venv/bin/activate
+```
+
 Download last 30 days of transactions to CSV:
 ```bash
 python main.py --output transactions.csv
@@ -117,6 +174,11 @@ python main.py --output transactions.csv
 **For 2FA accounts**: Use `--show-browser` to see the browser window and complete 2FA manually:
 ```bash
 python main.py --show-browser --output transactions.csv
+```
+
+When done, you can deactivate the virtual environment:
+```bash
+deactivate
 ```
 
 ### Date Range Options
