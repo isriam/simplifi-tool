@@ -152,7 +152,7 @@ class SessionStatus(BaseModel):
     message: str
 
 
-def get_client_from_session(request: Request) -> SimplifiClient:
+async def get_client_from_session(request: Request) -> SimplifiClient:
     """Get the client instance from the user's session"""
     session_id = request.session.get('session_id')
     if not session_id or session_id not in user_sessions:
@@ -162,18 +162,18 @@ def get_client_from_session(request: Request) -> SimplifiClient:
     if session_id in session_timestamps:
         session_age = datetime.now() - session_timestamps[session_id]
         if session_age.total_seconds() > (SESSION_TIMEOUT_MINUTES * 60):
-            cleanup_session(session_id)
+            await cleanup_session(session_id)
             request.session.clear()
             raise HTTPException(status_code=401, detail="Session expired. Please login again.")
 
     return user_sessions[session_id]
 
 
-def cleanup_session(session_id: str):
+async def cleanup_session(session_id: str):
     """Clean up a user session and close the browser"""
     if session_id in user_sessions:
         try:
-            user_sessions[session_id].close()
+            await user_sessions[session_id].close()
         except Exception as e:
             logger.error(f"Error closing client for session {session_id}: {e}")
         finally:
@@ -184,7 +184,7 @@ def cleanup_session(session_id: str):
         del session_timestamps[session_id]
 
 
-def cleanup_expired_sessions():
+async def cleanup_expired_sessions():
     """Background task to clean up expired sessions"""
     logger.info("Running session cleanup task...")
     expired_sessions = []
@@ -196,7 +196,7 @@ def cleanup_expired_sessions():
 
     for session_id in expired_sessions:
         logger.info(f"Cleaning up expired session: {session_id}")
-        cleanup_session(session_id)
+        await cleanup_session(session_id)
 
     if expired_sessions:
         logger.info(f"Cleaned up {len(expired_sessions)} expired session(s)")
@@ -720,7 +720,7 @@ async def login(login_request: LoginRequest, request: Request):
         # Clean up any existing session for this user
         old_session_id = request.session.get('session_id')
         if old_session_id:
-            cleanup_session(old_session_id)
+            await cleanup_session(old_session_id)
 
         # Create new client instance
         client = SimplifiClient(
@@ -728,9 +728,9 @@ async def login(login_request: LoginRequest, request: Request):
             password=login_request.password,
             headless=login_request.headless
         )
-        client._start_browser()
+        await client._start_browser()
 
-        success = client.login()
+        success = await client.login()
 
         if success:
             # Create new session ID and store the client
@@ -742,7 +742,7 @@ async def login(login_request: LoginRequest, request: Request):
             logger.info(f"Successful login for user: {login_request.email}")
             return {"message": "Login successful! Dashboard is now available."}
         else:
-            client.close()
+            await client.close()
             logger.warning(f"Failed login attempt for user: {login_request.email}")
             raise HTTPException(status_code=401, detail="Login failed. Please check credentials.")
 
@@ -756,10 +756,10 @@ async def login(login_request: LoginRequest, request: Request):
 @app.get("/api/accounts")
 async def get_accounts(request: Request):
     """Get list of all accounts"""
-    client = get_client_from_session(request)
+    client = await get_client_from_session(request)
 
     try:
-        accounts = client.get_accounts()
+        accounts = await client.get_accounts()
         return {"accounts": accounts, "count": len(accounts)}
     except Exception as e:
         logger.error(f"Error fetching accounts: {str(e)}", exc_info=True)
@@ -769,7 +769,7 @@ async def get_accounts(request: Request):
 @app.get("/api/categories")
 async def get_categories(request: Request):
     """Get list of all categories"""
-    client = get_client_from_session(request)
+    client = await get_client_from_session(request)
 
     try:
         # This is a placeholder - implement category fetching in SimplifiClient if needed
@@ -782,13 +782,13 @@ async def get_categories(request: Request):
 @app.post("/api/transactions")
 async def download_transactions(transaction_request: TransactionRequest, request: Request):
     """Download and filter transactions"""
-    client = get_client_from_session(request)
+    client = await get_client_from_session(request)
 
     try:
         downloader = TransactionDownloader(client)
 
         # Download transactions
-        transactions = downloader.download_transactions(
+        transactions = await downloader.download_transactions(
             start_date=transaction_request.start_date,
             end_date=transaction_request.end_date,
             days=transaction_request.last_days,
@@ -841,13 +841,13 @@ async def download_transactions(transaction_request: TransactionRequest, request
 @app.post("/api/summary")
 async def get_summary(transaction_request: TransactionRequest, request: Request):
     """Get transaction summary statistics"""
-    client = get_client_from_session(request)
+    client = await get_client_from_session(request)
 
     try:
         downloader = TransactionDownloader(client)
 
         # Download transactions
-        transactions = downloader.download_transactions(
+        transactions = await downloader.download_transactions(
             start_date=transaction_request.start_date,
             end_date=transaction_request.end_date,
             days=transaction_request.last_days,
@@ -886,13 +886,13 @@ async def get_summary(transaction_request: TransactionRequest, request: Request)
 @app.post("/api/reports")
 async def generate_report(report_request: ReportRequest, request: Request):
     """Generate financial reports"""
-    client = get_client_from_session(request)
+    client = await get_client_from_session(request)
 
     try:
         downloader = TransactionDownloader(client)
 
         # Download transactions
-        transactions = downloader.download_transactions(
+        transactions = await downloader.download_transactions(
             start_date=report_request.start_date,
             end_date=report_request.end_date,
             days=report_request.last_days
@@ -990,7 +990,7 @@ async def logout(request: Request):
     try:
         session_id = request.session.get('session_id')
         if session_id:
-            cleanup_session(session_id)
+            await cleanup_session(session_id)
             request.session.clear()
             logger.info(f"User logged out successfully")
         return {"message": "Logged out successfully"}
