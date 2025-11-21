@@ -7,9 +7,10 @@ All code is self-contained with no third-party API dependencies
 import os
 import time
 import json
+import asyncio
 from typing import Optional, Dict, List
 from datetime import datetime
-from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext
+from playwright.async_api import async_playwright, Page, Browser, BrowserContext, Playwright
 from bs4 import BeautifulSoup
 
 
@@ -33,26 +34,26 @@ class SimplifiClient:
         self.password = password or os.getenv('SIMPLIFI_PASSWORD')
         self.headless = headless
 
-        self.playwright = None
+        self.playwright: Optional[Playwright] = None
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self.is_logged_in = False
 
-    def __enter__(self):
-        """Context manager entry"""
-        self._start_browser()
+    async def __aenter__(self):
+        """Async context manager entry"""
+        await self._start_browser()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit"""
-        self.close()
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit"""
+        await self.close()
 
-    def _start_browser(self):
+    async def _start_browser(self):
         """Start the Playwright browser"""
         if not self.playwright:
-            self.playwright = sync_playwright().start()
-            self.browser = self.playwright.chromium.launch(headless=self.headless)
+            self.playwright = await async_playwright().start()
+            self.browser = await self.playwright.chromium.launch(headless=self.headless)
             # Enhanced security configuration for browser context
             self.context = self.browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
@@ -68,18 +69,18 @@ class SimplifiClient:
             )
             # Set reasonable timeout for network requests
             self.context.set_default_timeout(30000)  # 30 seconds
-            self.page = self.context.new_page()
+            self.page = await self.context.new_page()
 
-    def close(self):
+    async def close(self):
         """Close the browser and cleanup resources"""
         if self.page:
-            self.page.close()
+            await self.page.close()
         if self.context:
-            self.context.close()
+            await self.context.close()
         if self.browser:
-            self.browser.close()
+            await self.browser.close()
         if self.playwright:
-            self.playwright.stop()
+            await self.playwright.stop()
 
         self.page = None
         self.context = None
@@ -87,7 +88,7 @@ class SimplifiClient:
         self.playwright = None
         self.is_logged_in = False
 
-    def login(self) -> bool:
+    async def login(self) -> bool:
         """
         Authenticate with Quicken Simplifi using browser automation
 
@@ -99,38 +100,38 @@ class SimplifiClient:
 
         try:
             if not self.page:
-                self._start_browser()
+                await self._start_browser()
 
             print(f"Navigating to login page...")
-            self.page.goto(self.LOGIN_URL, wait_until='networkidle')
+            await self.page.goto(self.LOGIN_URL, wait_until='networkidle')
 
             # Wait for login form to be visible
             print("Waiting for login form...")
-            self.page.wait_for_selector('input[type="email"], input[name="email"]', timeout=10000)
+            await self.page.wait_for_selector('input[type="email"], input[name="email"]', timeout=10000)
 
             # Fill in email
             print("Entering credentials...")
             email_selector = 'input[type="email"], input[name="email"]'
-            self.page.fill(email_selector, self.email)
+            await self.page.fill(email_selector, self.email)
 
             # Fill in password
             password_selector = 'input[type="password"], input[name="password"]'
-            self.page.fill(password_selector, self.password)
+            await self.page.fill(password_selector, self.password)
 
             # Submit the form
             print("Submitting login form...")
             submit_button = 'button[type="submit"], button:has-text("Log in"), button:has-text("Sign in")'
-            self.page.click(submit_button)
+            await self.page.click(submit_button)
 
             # Wait for navigation after login
             # We'll wait for either the dashboard or an error message
             try:
                 # Wait for post-login page to load
-                self.page.wait_for_load_state('networkidle', timeout=15000)
+                await self.page.wait_for_load_state('networkidle', timeout=15000)
 
                 # Check if we're logged in by looking for common dashboard elements
                 # This might need adjustment based on actual Simplifi UI
-                time.sleep(2)  # Give page time to fully render
+                await asyncio.sleep(2)  # Give page time to fully render
 
                 current_url = self.page.url
                 if 'login' not in current_url.lower() or 'dashboard' in current_url.lower():
@@ -149,7 +150,7 @@ class SimplifiClient:
             print(f"Login failed: {e}")
             return False
 
-    def wait_for_2fa(self, timeout: int = 120):
+    async def wait_for_2fa(self, timeout: int = 120):
         """
         Wait for user to complete 2FA manually
 
@@ -170,21 +171,21 @@ class SimplifiClient:
                 print("✓ 2FA completed successfully")
                 self.is_logged_in = True
                 return True
-            time.sleep(1)
+            await asyncio.sleep(1)
 
         print("✗ 2FA timeout")
         return False
 
-    def navigate_to_transactions(self):
+    async def navigate_to_transactions(self):
         """Navigate to the transactions page"""
         if not self.is_logged_in:
             raise ValueError("Must be logged in first")
 
         print("Navigating to transactions page...")
-        self.page.goto(self.TRANSACTIONS_URL, wait_until='networkidle')
-        time.sleep(2)  # Allow page to fully load
+        await self.page.goto(self.TRANSACTIONS_URL, wait_until='networkidle')
+        await asyncio.sleep(2)  # Allow page to fully load
 
-    def get_accounts(self) -> List[Dict]:
+    async def get_accounts(self) -> List[Dict]:
         """
         Retrieve all accounts by scraping the accounts page
 
@@ -197,11 +198,11 @@ class SimplifiClient:
         try:
             print("Scraping accounts...")
             accounts_url = f"{self.BASE_URL}/accounts"
-            self.page.goto(accounts_url, wait_until='networkidle')
-            time.sleep(2)
+            await self.page.goto(accounts_url, wait_until='networkidle')
+            await asyncio.sleep(2)
 
             # Get page content
-            content = self.page.content()
+            content = await self.page.content()
             soup = BeautifulSoup(content, 'html.parser')
 
             # This is a placeholder - actual selectors will depend on Simplifi's HTML structure
@@ -225,7 +226,7 @@ class SimplifiClient:
             print(f"Failed to retrieve accounts: {e}")
             return []
 
-    def get_transactions(self,
+    async def get_transactions(self,
                         start_date: Optional[str] = None,
                         end_date: Optional[str] = None,
                         account_id: Optional[str] = None) -> List[Dict]:
@@ -244,22 +245,22 @@ class SimplifiClient:
             raise ValueError("Must be logged in to retrieve transactions")
 
         try:
-            self.navigate_to_transactions()
+            await self.navigate_to_transactions()
 
             # Apply date filters if provided
             if start_date or end_date:
-                self._apply_date_filter(start_date, end_date)
+                await self._apply_date_filter(start_date, end_date)
 
             # Apply account filter if provided
             if account_id:
-                self._apply_account_filter(account_id)
+                await self._apply_account_filter(account_id)
 
             # Scroll to load all transactions
             print("Loading all transactions...")
-            self._scroll_to_load_all()
+            await self._scroll_to_load_all()
 
             # Extract transactions from page
-            transactions = self._extract_transactions_from_page()
+            transactions = await self._extract_transactions_from_page()
 
             return transactions
 
@@ -269,7 +270,7 @@ class SimplifiClient:
             traceback.print_exc()
             return []
 
-    def _apply_date_filter(self, start_date: Optional[str], end_date: Optional[str]):
+    async def _apply_date_filter(self, start_date: Optional[str], end_date: Optional[str]):
         """Apply date range filter on transactions page"""
         # This will need to be customized based on Simplifi's actual UI
         print(f"Applying date filter: {start_date} to {end_date}")
@@ -279,42 +280,42 @@ class SimplifiClient:
             # This is a placeholder - actual implementation depends on UI
             date_filter_button = 'button:has-text("Date"), .date-filter, [aria-label*="date"]'
 
-            if self.page.locator(date_filter_button).count() > 0:
-                self.page.click(date_filter_button)
-                time.sleep(1)
+            if await self.page.locator(date_filter_button).count() > 0:
+                await self.page.click(date_filter_button)
+                await asyncio.sleep(1)
 
                 # Fill in dates (adjust selectors as needed)
                 if start_date:
-                    self.page.fill('input[name="startDate"], input[placeholder*="Start"]', start_date)
+                    await self.page.fill('input[name="startDate"], input[placeholder*="Start"]', start_date)
 
                 if end_date:
-                    self.page.fill('input[name="endDate"], input[placeholder*="End"]', end_date)
+                    await self.page.fill('input[name="endDate"], input[placeholder*="End"]', end_date)
 
                 # Apply filter
-                self.page.click('button:has-text("Apply"), button:has-text("Filter")')
-                time.sleep(2)
+                await self.page.click('button:has-text("Apply"), button:has-text("Filter")')
+                await asyncio.sleep(2)
 
         except Exception as e:
             print(f"Could not apply date filter: {e}")
 
-    def _apply_account_filter(self, account_id: str):
+    async def _apply_account_filter(self, account_id: str):
         """Apply account filter on transactions page"""
         print(f"Applying account filter: {account_id}")
         # Implementation depends on Simplifi's UI structure
 
-    def _scroll_to_load_all(self):
+    async def _scroll_to_load_all(self):
         """Scroll page to trigger lazy loading of all transactions"""
-        last_height = self.page.evaluate("document.body.scrollHeight")
+        last_height = await self.page.evaluate("document.body.scrollHeight")
         scroll_attempts = 0
         max_attempts = 20
 
         while scroll_attempts < max_attempts:
             # Scroll down
-            self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(1)
+            await self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(1)
 
             # Calculate new scroll height
-            new_height = self.page.evaluate("document.body.scrollHeight")
+            new_height = await self.page.evaluate("document.body.scrollHeight")
 
             if new_height == last_height:
                 break
@@ -324,11 +325,11 @@ class SimplifiClient:
 
         print(f"Scrolled {scroll_attempts} times to load transactions")
 
-    def _extract_transactions_from_page(self) -> List[Dict]:
+    async def _extract_transactions_from_page(self) -> List[Dict]:
         """Extract transaction data from the current page"""
         print("Extracting transactions from page...")
 
-        content = self.page.content()
+        content = await self.page.content()
         soup = BeautifulSoup(content, 'html.parser')
 
         transactions = []
@@ -402,7 +403,7 @@ class SimplifiClient:
             print(f"Error parsing transaction: {e}")
             return None
 
-    def export_page_as_csv_from_ui(self, output_path: str = "transactions_export.csv"):
+    async def export_page_as_csv_from_ui(self, output_path: str = "transactions_export.csv"):
         """
         Use Simplifi's built-in export feature to download CSV
 
@@ -415,7 +416,7 @@ class SimplifiClient:
             raise ValueError("Must be logged in to export transactions")
 
         try:
-            self.navigate_to_transactions()
+            await self.navigate_to_transactions()
 
             print("Looking for export button...")
 
@@ -429,15 +430,15 @@ class SimplifiClient:
             ]
 
             for selector in export_selectors:
-                if self.page.locator(selector).count() > 0:
+                if await self.page.locator(selector).count() > 0:
                     print(f"Found export button: {selector}")
 
                     # Set up download handler
-                    with self.page.expect_download() as download_info:
-                        self.page.click(selector)
+                    async with self.page.expect_download() as download_info:
+                        await self.page.click(selector)
 
-                    download = download_info.value
-                    download.save_as(output_path)
+                    download = await download_info.value
+                    await download.save_as(output_path)
                     print(f"✓ Exported transactions to {output_path}")
                     return True
 
@@ -448,8 +449,8 @@ class SimplifiClient:
             print(f"Export failed: {e}")
             return False
 
-    def screenshot(self, filename: str = "screenshot.png"):
+    async def screenshot(self, filename: str = "screenshot.png"):
         """Take a screenshot of the current page (useful for debugging)"""
         if self.page:
-            self.page.screenshot(path=filename)
+            await self.page.screenshot(path=filename)
             print(f"Screenshot saved to {filename}")

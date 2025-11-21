@@ -23,7 +23,7 @@ class TransactionDownloader:
         """
         self.client = client
 
-    def download_transactions(self,
+    async def download_transactions(self,
                              start_date: Optional[str] = None,
                              end_date: Optional[str] = None,
                              account_id: Optional[str] = None,
@@ -56,7 +56,7 @@ class TransactionDownloader:
 
         print(f"Downloading transactions from {start_date} to {end_date}...")
 
-        transactions = self.client.get_transactions(
+        transactions = await self.client.get_transactions(
             account_id=account_id,
             start_date=start_date,
             end_date=end_date
