@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 class SimplifiClient:
     """Client for interacting with Quicken Simplifi using browser automation"""
 
-    BASE_URL = "https://app.simplifimoney.com"
+    BASE_URL = "https://simplifi.quicken.com"
     LOGIN_URL = f"{BASE_URL}/login"
     TRANSACTIONS_URL = f"{BASE_URL}/transactions"
 
@@ -352,7 +352,7 @@ class SimplifiClient:
 
         try:
             print("Scraping accounts...")
-            accounts_url = f"{self.BASE_URL}/accounts"
+            accounts_url = "https://simplifi.quicken.com/settings/accounts"
             await self.page.goto(accounts_url, wait_until='networkidle')
             await asyncio.sleep(2)
 

@@ -32,7 +32,7 @@ class TransactionDownloader:
         Download transactions from Simplifi using browser automation
 
         Args:
-            start_date: Start date in YYYY-MM-DD format (defaults to 30 days ago)
+            start_date: Start date in YYYY-MM-DD format (defaults to January 1st of current year)
             end_date: End date in YYYY-MM-DD format (defaults to today)
             account_id: Optional account ID to filter transactions
             days: Number of days back from today (alternative to start_date)
@@ -50,9 +50,9 @@ class TransactionDownloader:
                 end_date = datetime.now().strftime('%Y-%m-%d')
 
             if not start_date:
-                # Default to 30 days ago
-                start = datetime.now() - timedelta(days=30)
-                start_date = start.strftime('%Y-%m-%d')
+                # Default to January 1st of current year
+                current_year = datetime.now().year
+                start_date = f'{current_year}-01-01'
 
         print(f"Downloading transactions from {start_date} to {end_date}...")
 
