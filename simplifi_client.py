@@ -158,31 +158,44 @@ class SimplifiClient:
                 oauth_buttons = await self.page.locator('button:has-text("Sign in"), button:has-text("Log in"), a:has-text("Sign in"), a:has-text("Log in")').count()
                 if oauth_buttons > 0:
                     print(f"⚠️  Found {oauth_buttons} login button(s) - this may be an OAuth/SSO login flow")
-                    print("Please run with headless=False to complete login manually")
 
-                    # If not headless, wait for user to complete login manually
-                    if not self.headless:
-                        print("\n" + "="*60)
-                        print("MANUAL LOGIN REQUIRED")
-                        print("="*60)
-                        print("Please complete the login in the browser window.")
-                        print("Waiting up to 120 seconds for you to log in...")
-                        print("="*60 + "\n")
+                # If not headless, ALWAYS wait for user to complete login manually
+                # regardless of whether we found OAuth buttons or not
+                if not self.headless:
+                    print("\n" + "="*60)
+                    print("MANUAL LOGIN REQUIRED")
+                    print("="*60)
+                    print("Please complete the login in the browser window.")
+                    print("Waiting up to 180 seconds for you to log in...")
+                    print("The browser will stay open until you successfully log in")
+                    print("or the timeout is reached.")
+                    print("="*60 + "\n")
 
-                        # Wait for user to complete login
-                        start_time = time.time()
-                        while time.time() - start_time < 120:
+                    # Wait for user to complete login
+                    start_time = time.time()
+                    while time.time() - start_time < 180:
+                        current_url = self.page.url
+                        # Check if we've moved away from the login page
+                        if 'login' not in current_url.lower() and 'auth' not in current_url.lower():
+                            # Additional check: wait a bit longer to make sure we're really logged in
+                            print("Login page detected as complete, verifying...")
+                            await asyncio.sleep(5)
+
+                            # Re-check the URL to make sure we didn't redirect back
                             current_url = self.page.url
-                            if 'login' not in current_url.lower():
+                            if 'login' not in current_url.lower() and 'auth' not in current_url.lower():
                                 print("✓ Login successful (detected by URL change)")
+                                print(f"Current URL: {current_url}")
                                 self.is_logged_in = True
                                 return True
-                            await asyncio.sleep(2)
+                        await asyncio.sleep(2)
 
-                        print("✗ Login timeout - please try again")
-                        return False
-
-                return False
+                    print("✗ Login timeout - please try again")
+                    return False
+                else:
+                    # Headless mode without finding email field - can't proceed
+                    print("Cannot proceed with automated login. Please run with headless=False")
+                    return False
 
             # Fill in email
             print(f"Entering email...")
