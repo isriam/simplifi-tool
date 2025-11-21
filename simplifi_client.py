@@ -352,7 +352,7 @@ class SimplifiClient:
 
         try:
             print("Scraping accounts...")
-            accounts_url = f"{self.BASE_URL}/accounts"
+            accounts_url = "https://simplifi.quicken.com/settings/accounts"
             await self.page.goto(accounts_url, wait_until='networkidle')
             await asyncio.sleep(2)
 
