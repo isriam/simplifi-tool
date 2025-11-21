@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 class SimplifiClient:
     """Client for interacting with Quicken Simplifi using browser automation"""
 
-    BASE_URL = "https://app.simplifimoney.com"
+    BASE_URL = "https://simplifi.quicken.com"
     LOGIN_URL = f"{BASE_URL}/login"
     TRANSACTIONS_URL = f"{BASE_URL}/transactions"
 
